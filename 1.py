@@ -9,7 +9,7 @@ import matplotlib.animation as animation
 import numpy as np
 import os
 
-# --- NEW OFFLINE LIBRARIES ---
+# --- OFFLINE LIBRARIES ---
 import geonamescache
 from timezonefinder import TimezoneFinder
 
@@ -22,10 +22,8 @@ ALL_CITIES = gc.get_cities()
 EPHEMERIS_FILE = 'de422.bsp'
 if not os.path.exists(EPHEMERIS_FILE):
     print(f"CRITICAL ERROR: {EPHEMERIS_FILE} not found.")
-    print("Please place de422.bsp in the script folder.")
     exit()
 
-# Force built-in timescale data
 ts = load.timescale(builtin=True)
 planets = load(EPHEMERIS_FILE)
 earth_obj = planets['earth']
@@ -44,25 +42,13 @@ bodies = [
 ]
 
 def get_offline_location_data(city_query):
-    """
-    Finds city coordinates and timezone string entirely offline.
-    """
     search_name = city_query.title().strip()
-    # Filter local city database
     matches = [c for c in ALL_CITIES.values() if c['name'] == search_name]
-    
     if not matches:
-        print(f"City '{city_query}' not found. Defaulting to Greenwich.")
         return 51.4769, 0.0005, "UTC"
-    
-    # If multiple cities exist, pick the one with the highest population
     target = max(matches, key=lambda x: x['population'])
     lat, lon = float(target['latitude']), float(target['longitude'])
-    
-    # Determine timezone string from coordinates offline
     tz_str = tf.timezone_at(lng=lon, lat=lat) or "UTC"
-    
-    print(f"Matched: {target['name']}, {target['countrycode']} (TZ: {tz_str})")
     return lat, lon, tz_str
 
 def get_angle(v1, v2):
@@ -73,7 +59,7 @@ def get_angle(v1, v2):
 def run_app():
     while True:
         print("\n" + "="*40)
-        print("   SOLAR TRACKER: FULLY OFFLINE MODE")
+        print("   SOLAR TRACKER: DISTANCE & L2 ANGLES")
         print("="*40)
         
         time_choice = input("Use real-time tracking (y/n)? ").strip().lower()
@@ -85,17 +71,16 @@ def run_app():
             t_input = input("Time (HH:MM): ").strip()
         
         p_input = input("Target Planet (e.g. Mars): ").strip().lower()
-        if p_input == 'exit': break
         loc_input = input("City Name: ").strip()
-        if loc_input == 'exit': break
 
         try:
-            # Automatic offline lookup
             lat, lon, tz_str = get_offline_location_data(loc_input)
             local_tz = pytz.timezone(tz_str)
 
             plt.style.use('dark_background')
-            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 7), num="Planet & L2 Tracker")
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 8), num="Planet & L2 Tracker")
+            
+            plt.subplots_adjust(bottom=0.15, top=0.85, wspace=0.3)
             
             def update(frame):
                 ax1.clear()
@@ -106,13 +91,15 @@ def run_app():
                     dt_now = datetime.now(local_tz)
                     t_current = ts.from_datetime(dt_now)
                     time_label = dt_now.strftime("%Y-%m-%d %H:%M:%S")
-                    ax1.text(0.02, 0.95, '● LIVE', transform=ax1.transAxes, color='red', fontweight='bold')
+                    
+                    ax1.text(0.02, 0.96, 'LIVE', transform=ax1.transAxes, color='red', 
+                             fontweight='bold', fontsize=12, verticalalignment='top')
                 else:
                     dt = local_tz.localize(datetime.strptime(f"{d_input} {t_input}", "%Y-%m-%d %H:%M"))
                     t_current = ts.from_datetime(dt)
                     time_label = f"{d_input} {t_input}"
 
-                # Calculate coordinates
+                # Coordinates
                 current_coords = {}
                 for body in bodies:
                     pos = sun.at(t_current).observe(planets[body]).position.au
@@ -135,33 +122,45 @@ def run_app():
                     ax1.text(pos[0]+0.1, pos[1]+0.1, name, fontsize=8)
 
                 ax1.plot([e_vec[0], p_vec[0]], [e_vec[1], p_vec[1]], 'w--', alpha=0.3)
+                
+                ax1.text(0.5, -0.12, f"Earth to {target_name}: {dist_km:,.0f} km", 
+                         transform=ax1.transAxes, ha='center', color='yellow', fontsize=11, fontweight='bold')
+                
                 limit = max(np.linalg.norm(p_vec) * 1.2, 2.5)
                 ax1.set_xlim(-limit, limit); ax1.set_ylim(-limit, limit)
                 ax1.set_aspect('equal')
-                ax1.set_title(f"Solar System ({time_label})\nDist: {dist_km:,.0f} km")
+                ax1.set_title(f"Solar System\n{time_label}", pad=20)
 
-                # --- Plot 2: L2 Zoom ---
                 if p_input in MASS_RATIOS:
                     R_dist = np.linalg.norm(p_vec)
                     l2_au = R_dist * (MASS_RATIOS[p_input] / 3)**(1/3)
+                    l2_km = l2_au * 149597870.7
                     l2_vec = p_vec + (p_vec / R_dist * l2_au)
+                    angle_e_l2 = get_angle(e_vec, l2_vec)
                     
                     ax2.scatter(p_vec[0], p_vec[1], s=400, color='lime', label=target_name)
-                    ax2.scatter(l2_vec[0], l2_vec[1], s=200, color='red', marker='x', label='L2')
+                    ax2.scatter(l2_vec[0], l2_vec[1], s=200, color='red', marker='x', label='L2 Point')
                     ax2.plot([p_vec[0], l2_vec[0]], [p_vec[1], l2_vec[1]], 'w:', alpha=0.5)
+                    
+                    ax2.text((p_vec[0]+l2_vec[0])/2, (p_vec[1]+l2_vec[1])/2, f"{l2_km:,.0f} km", 
+                             color='tomato', fontsize=9, ha='center', fontweight='bold', bbox=dict(facecolor='black', alpha=0.6, lw=0))
                     
                     margin = l2_au * 1.5
                     ax2.set_xlim(min(p_vec[0], l2_vec[0]) - margin, max(p_vec[0], l2_vec[0]) + margin)
                     ax2.set_ylim(min(p_vec[1], l2_vec[1]) - margin, max(p_vec[1], l2_vec[1]) + margin)
                     ax2.set_aspect('equal')
-                    ax2.set_title(f"L2 Zoom: {target_name}\nAngle E-S-P: {angle_e_p:.2f}°")
-                    ax2.legend()
+                    ax2.set_title(f"L2 Zoom: {target_name}", pad=20)
+                    ax2.text(0.5, -0.12, f"Angle E-S-P: {angle_e_p:.2f}°\nAngle E-S-L2: {angle_e_l2:.2f}°", 
+                             transform=ax2.transAxes, ha='center', color='white', fontsize=11)
+                    ax2.legend(loc='upper right')
+                else:
+                    ax2.text(0.5, 0.5, "L2 data not available", ha='center')
 
-            update(0)
             if time_choice == 'y':
                 ani = animation.FuncAnimation(fig, update, interval=1000, cache_frame_data=False)
                 plt.show()
             else:
+                update(0)
                 plt.show()
 
         except Exception as e:
