@@ -1,4 +1,4 @@
-import matplotlib
+import matplotlib22
 matplotlib.use('TkAgg') 
 
 from skyfield.api import load, wgs84
