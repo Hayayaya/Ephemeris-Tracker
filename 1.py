@@ -7,18 +7,10 @@ import pytz
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 from geopy.geocoders import Nominatim
+from geopy.exc import GeopyError
 import ssl
 import certifi
 import time
-import numpy as np
-
-# Dictionary of planet masses relative to Sun for L2 calculation
-# Formula: r_L2 = R * (M_planet / (3 * M_sun))^(1/3)
-MASS_RATIOS = {
-    'Mercury': 1.6601e-7, 'Venus': 2.4478e-6, 'Earth': 3.0034e-6,
-    'Mars': 3.2271e-7, 'Jupiter': 9.5479e-4, 'Saturn': 2.8588e-4,
-    'Uranus': 4.3662e-5, 'Neptune': 5.1513e-5
-}
 
 try:
     ctx = ssl.create_default_context(cafile=certifi.where())
@@ -40,7 +32,7 @@ bodies = [
 def run_app():
     while True:
         print("\n" + "="*30)
-        print("    Solar System Tracker + L2")
+        print("   Solar System Tracker")
         print("="*30)
         print("(Type 'exit' at any prompt to quit)")
         
@@ -100,49 +92,25 @@ def run_app():
                 for body in bodies:
                     pos = sun.at(t_current).observe(planets[body]).position.au
                     name = body.split()[0].capitalize()
-                    current_coords[name] = np.array([pos[0], pos[1]])
+                    current_coords[name] = (pos[0], pos[1])
 
-                # Plot Sun
                 ax.scatter(0, 0, color='yellow', s=300, edgecolors='orange', zorder=5)
-                
                 ex, ey = current_coords['Earth']
                 
-                for name, pos in current_coords.items():
-                    px, py = pos
+                for name, (px, py) in current_coords.items():
                     is_target = (name == target_name)
                     color = 'cyan' if name == 'Earth' else ('lime' if is_target else 'white')
                     ax.scatter(px, py, s=100 if is_target or name=='Earth' else 40, color=color, zorder=10)
                     ax.text(px + 0.1, py + 0.1, name, fontsize=9, color=color)
-                    
-                    # Draw Orbits
-                    r = np.linalg.norm(pos)
+                    r = (px**2 + py**2)**0.5
                     ax.add_patch(plt.Circle((0,0), r, color='white', fill=False, alpha=0.1))
 
-                    # --- L2 LAGRANGE CALCULATION ---
-                    if is_target and name in MASS_RATIOS:
-                        # R = distance from sun to planet
-                        R = np.linalg.norm(pos)
-                        # r_l2 = distance from planet to L2
-                        r_l2 = R * (MASS_RATIOS[name] / 3)**(1/3)
-                        
-                        # L2 is on the line connecting Sun (0,0) and Planet, but further out.
-                        # Unit vector from Sun to Planet
-                        unit_vec = pos / R
-                        l2_pos = pos + (unit_vec * r_l2)
-                        
-                        ax.scatter(l2_pos[0], l2_pos[1], color='red', s=30, marker='x', zorder=15)
-                        ax.text(l2_pos[0]+0.05, l2_pos[1]+0.05, f"{name} L2", color='red', fontsize=8)
-                        
-                        l2_dist_km = r_l2 * 149597870.7 # AU to KM
-                        print(f"Calculated {name} L2 distance from planet: {l2_dist_km:,.0f} km")
-
-                # Distance line from Earth to Target
                 if target_name in current_coords and target_name != 'Earth':
                     tx, ty = current_coords[target_name]
                     ax.plot([ex, tx], [ey, ty], color='yellow', linestyle='--', alpha=0.5)
                     ax.text((ex+tx)/2, (ey+ty)/2, f"{dist.km:,.0f} km", color='yellow', fontsize=8, bbox=dict(facecolor='black', alpha=0.5))
 
-                limit = max(np.linalg.norm(current_coords[target_name]) * 1.3, 2) if target_name in current_coords else 15
+                limit = max((current_coords[target_name][0]**2 + current_coords[target_name][1]**2)**0.5 * 1.2, 2) if target_name in current_coords else 15
                 ax.set_xlim(-limit, limit)
                 ax.set_ylim(-limit, limit)
                 ax.set_aspect('equal')
