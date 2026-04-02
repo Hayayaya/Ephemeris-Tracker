@@ -6,34 +6,36 @@ from datetime import datetime
 import pytz
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
-import time
+import numpy as np
 import os
 
+# --- NEW OFFLINE LIBRARIES ---
+import geonamescache
+from timezonefinder import TimezoneFinder
+
+# Initialize offline databases
+gc = geonamescache.GeonamesCache()
+tf = TimezoneFinder()
+ALL_CITIES = gc.get_cities()
+
 # --- OFFLINE CONFIGURATION ---
-OFFLINE_CITIES = {
-    "london": (51.5074, -0.1278),
-    "new york": (40.7128, -74.0060),
-    "tokyo": (35.6762, 139.6503),
-    "chennai": (13.0827, 80.2707),
-    "sydney": (-33.8688, 151.2093),
-}
-
 EPHEMERIS_FILE = 'de422.bsp'
-
-# --- STRICT OFFLINE LOADING ---
-# 1. Force timescale to use built-in files only (no downloading deltat.tdb or leap_seconds)
-ts = load.timescale(builtin=True)
-
-# 2. Check for ephemeris locally before loading to prevent Skyfield from attempting a download
 if not os.path.exists(EPHEMERIS_FILE):
     print(f"CRITICAL ERROR: {EPHEMERIS_FILE} not found.")
-    print("This app is in OFFLINE mode and cannot download data.")
     print("Please place de422.bsp in the script folder.")
     exit()
 
+# Force built-in timescale data
+ts = load.timescale(builtin=True)
 planets = load(EPHEMERIS_FILE)
 earth_obj = planets['earth']
 sun = planets['sun']
+
+MASS_RATIOS = {
+    'mercury': 1.66e-7, 'venus': 2.44e-6, 'earth': 3.00e-6,
+    'mars': 3.22e-7, 'jupiter': 9.54e-4, 'saturn': 2.85e-4,
+    'uranus': 4.36e-5, 'neptune': 5.15e-5
+}
 
 bodies = [
     'mercury barycenter', 'venus barycenter', 'earth barycenter', 
@@ -41,16 +43,38 @@ bodies = [
     'uranus barycenter', 'neptune barycenter'
 ]
 
-def get_offline_location(city_name):
-    name = city_name.lower().strip()
-    return OFFLINE_CITIES.get(name, (0.0, 0.0))
+def get_offline_location_data(city_query):
+    """
+    Finds city coordinates and timezone string entirely offline.
+    """
+    search_name = city_query.title().strip()
+    # Filter local city database
+    matches = [c for c in ALL_CITIES.values() if c['name'] == search_name]
+    
+    if not matches:
+        print(f"City '{city_query}' not found. Defaulting to Greenwich.")
+        return 51.4769, 0.0005, "UTC"
+    
+    # If multiple cities exist, pick the one with the highest population
+    target = max(matches, key=lambda x: x['population'])
+    lat, lon = float(target['latitude']), float(target['longitude'])
+    
+    # Determine timezone string from coordinates offline
+    tz_str = tf.timezone_at(lng=lon, lat=lat) or "UTC"
+    
+    print(f"Matched: {target['name']}, {target['countrycode']} (TZ: {tz_str})")
+    return lat, lon, tz_str
+
+def get_angle(v1, v2):
+    unit_v1 = v1 / np.linalg.norm(v1)
+    unit_v2 = v2 / np.linalg.norm(v2)
+    return np.degrees(np.arccos(np.clip(np.dot(unit_v1, unit_v2), -1.0, 1.0)))
 
 def run_app():
     while True:
-        print("\n" + "="*30)
-        print("   Solar System Tracker (STRICT OFFLINE)")
-        print("="*30)
-        print("(Type 'exit' to quit)")
+        print("\n" + "="*40)
+        print("   SOLAR TRACKER: FULLY OFFLINE MODE")
+        print("="*40)
         
         time_choice = input("Use real-time tracking (y/n)? ").strip().lower()
         if time_choice == 'exit': break
@@ -58,101 +82,90 @@ def run_app():
         d_input, t_input = None, None
         if time_choice != 'y':
             d_input = input("Date (YYYY-MM-DD): ").strip()
-            if d_input == 'exit': break
             t_input = input("Time (HH:MM): ").strip()
-            if t_input == 'exit': break
         
-        p_input = input("Planet (e.g., Mars): ").strip().lower()
+        p_input = input("Target Planet (e.g. Mars): ").strip().lower()
         if p_input == 'exit': break
-        loc_input = input("City (from list): ").strip()
+        loc_input = input("City Name: ").strip()
         if loc_input == 'exit': break
-        tz_input = input("Timezone (e.g., UTC): ").strip()
-        if tz_input == 'exit': break
 
         try:
-            lat, lon = get_offline_location(loc_input)
+            # Automatic offline lookup
+            lat, lon, tz_str = get_offline_location_data(loc_input)
+            local_tz = pytz.timezone(tz_str)
+
             plt.style.use('dark_background')
-            fig, ax = plt.subplots(figsize=(10, 10))
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 7), num="Planet & L2 Tracker")
             
             def update(frame):
-                ax.clear()
+                ax1.clear()
+                ax2.clear()
                 target_name = p_input.capitalize()
                 
-                # Time handling
-                try:
-                    local_tz = pytz.timezone(tz_input)
-                except pytz.UnknownTimeZoneError:
-                    local_tz = pytz.UTC
-
-                if time_choice != 'y':
-                    dt = local_tz.localize(datetime.strptime(f"{d_input} {t_input}", "%Y-%m-%d %H:%M"))
-                    t_current = ts.from_datetime(dt)
-                    time_label = f"{d_input} {t_input}"
-                    title_prefix = "Snapshot"
-                else:
+                if time_choice == 'y':
                     dt_now = datetime.now(local_tz)
                     t_current = ts.from_datetime(dt_now)
                     time_label = dt_now.strftime("%Y-%m-%d %H:%M:%S")
-                    title_prefix = "LIVE"
+                    ax1.text(0.02, 0.95, '● LIVE', transform=ax1.transAxes, color='red', fontweight='bold')
+                else:
+                    dt = local_tz.localize(datetime.strptime(f"{d_input} {t_input}", "%Y-%m-%d %H:%M"))
+                    t_current = ts.from_datetime(dt)
+                    time_label = f"{d_input} {t_input}"
 
-                # Calculations
-                observer = earth_obj + wgs84.latlon(lat, lon)
-                target_key = p_input if p_input in ['sun', 'moon'] else f'{p_input} barycenter'
-                
-                try:
-                    astrometric = observer.at(t_current).observe(planets[target_key])
-                    alt, az, dist = astrometric.apparent().altaz()
-                except KeyError:
-                    ax.text(0, 0, f"Error: '{p_input}' not in file.", ha='center', color='red')
-                    return
-
-                # Orbital Plotting
+                # Calculate coordinates
                 current_coords = {}
                 for body in bodies:
                     pos = sun.at(t_current).observe(planets[body]).position.au
                     name = body.split()[0].capitalize()
-                    current_coords[name] = (pos[0], pos[1])
+                    current_coords[name] = np.array([pos[0], pos[1]])
 
-                # Draw Sun
-                ax.scatter(0, 0, color='yellow', s=300, edgecolors='orange', zorder=5)
+                e_vec = current_coords['Earth']
+                p_vec = current_coords.get(target_name, np.array([0,0]))
                 
-                # Draw Planets and Orbits
-                ex, ey = current_coords['Earth']
-                for name, (px, py) in current_coords.items():
-                    is_target = (name == target_name)
-                    color = 'cyan' if name == 'Earth' else ('lime' if is_target else 'white')
-                    ax.scatter(px, py, s=100 if is_target or name=='Earth' else 40, color=color, zorder=10)
-                    ax.text(px + 0.1, py + 0.1, name, fontsize=9, color=color)
+                dist_km = np.linalg.norm(p_vec - e_vec) * 149597870.7
+                angle_e_p = get_angle(e_vec, p_vec)
+
+                # --- Plot 1: Solar System ---
+                ax1.scatter(0, 0, color='yellow', s=200, edgecolors='orange')
+                for name, pos in current_coords.items():
+                    is_active = name in ['Earth', target_name]
+                    ax1.scatter(pos[0], pos[1], s=60 if is_active else 30, 
+                                color='cyan' if name == 'Earth' else ('lime' if name == target_name else 'gray'),
+                                alpha=1.0 if is_active else 0.3)
+                    ax1.text(pos[0]+0.1, pos[1]+0.1, name, fontsize=8)
+
+                ax1.plot([e_vec[0], p_vec[0]], [e_vec[1], p_vec[1]], 'w--', alpha=0.3)
+                limit = max(np.linalg.norm(p_vec) * 1.2, 2.5)
+                ax1.set_xlim(-limit, limit); ax1.set_ylim(-limit, limit)
+                ax1.set_aspect('equal')
+                ax1.set_title(f"Solar System ({time_label})\nDist: {dist_km:,.0f} km")
+
+                # --- Plot 2: L2 Zoom ---
+                if p_input in MASS_RATIOS:
+                    R_dist = np.linalg.norm(p_vec)
+                    l2_au = R_dist * (MASS_RATIOS[p_input] / 3)**(1/3)
+                    l2_vec = p_vec + (p_vec / R_dist * l2_au)
                     
-                    # Orbit line
-                    r = (px**2 + py**2)**0.5
-                    ax.add_patch(plt.Circle((0,0), r, color='white', fill=False, alpha=0.1))
+                    ax2.scatter(p_vec[0], p_vec[1], s=400, color='lime', label=target_name)
+                    ax2.scatter(l2_vec[0], l2_vec[1], s=200, color='red', marker='x', label='L2')
+                    ax2.plot([p_vec[0], l2_vec[0]], [p_vec[1], l2_vec[1]], 'w:', alpha=0.5)
+                    
+                    margin = l2_au * 1.5
+                    ax2.set_xlim(min(p_vec[0], l2_vec[0]) - margin, max(p_vec[0], l2_vec[0]) + margin)
+                    ax2.set_ylim(min(p_vec[1], l2_vec[1]) - margin, max(p_vec[1], l2_vec[1]) + margin)
+                    ax2.set_aspect('equal')
+                    ax2.set_title(f"L2 Zoom: {target_name}\nAngle E-S-P: {angle_e_p:.2f}°")
+                    ax2.legend()
 
-                # Visual distance line
-                if target_name in current_coords and target_name != 'Earth':
-                    tx, ty = current_coords[target_name]
-                    ax.plot([ex, tx], [ey, ty], color='yellow', linestyle='--', alpha=0.5)
-                    ax.text((ex+tx)/2, (ey+ty)/2, f"{dist.km:,.0f} km", color='yellow', 
-                            fontsize=8, bbox=dict(facecolor='black', alpha=0.5))
-
-                # Scaling
-                limit = max((current_coords[target_name][0]**2 + current_coords[target_name][1]**2)**0.5 * 1.2, 2) if target_name in current_coords else 15
-                ax.set_xlim(-limit, limit)
-                ax.set_ylim(-limit, limit)
-                ax.set_aspect('equal')
-                ax.set_xlabel("Distance (AU)")
-                ax.set_ylabel("Distance (AU)")
-                plt.title(f"{title_prefix}: {target_name}\n{time_label}\nAlt: {alt.degrees:.2f}°", color='white')
-
+            update(0)
             if time_choice == 'y':
                 ani = animation.FuncAnimation(fig, update, interval=1000, cache_frame_data=False)
                 plt.show()
             else:
-                update(0)
                 plt.show()
 
         except Exception as e:
-            print(f"Error encountered: {e}")
+            print(f"Error: {e}")
 
 if __name__ == "__main__":
     run_app()
