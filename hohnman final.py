@@ -28,8 +28,7 @@ MASS_RATIOS = {'mercury': 1.66e-7, 'venus': 2.44e-6, 'earth': 3.00e-6, 'mars': 3
 def get_offline_location_data(city_query):
     search_name = city_query.title().strip()
     matches = [c for c in ALL_CITIES.values() if c['name'] == search_name]
-    if not matches: 
-        return 51.4769, 0.0005, "UTC"
+    if not matches: return 51.4769, 0.0005, "UTC"
     target = max(matches, key=lambda x: x['population'])
     return float(target['latitude']), float(target['longitude']), tf.timezone_at(lng=float(target['longitude']), lat=float(target['latitude'])) or "UTC"
 
@@ -91,13 +90,11 @@ def run_app():
             
             plt.style.use('dark_background')
             
-            # WINDOW 1: OVERVIEW
             fig1, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(18, 6))
             fig1.canvas.manager.set_window_title('System Overview')
             plt.subplots_adjust(wspace=0.3, bottom=0.2)
             fig1.canvas.mpl_connect('key_press_event', on_press)
 
-            # WINDOW 2: TRANSITION ZOOM
             fig2, (tax1, tax2) = plt.subplots(1, 2, figsize=(12, 6))
             fig2.canvas.manager.set_window_title('Orbital Handover Analysis')
             fig2.canvas.mpl_connect('key_press_event', on_press)
@@ -136,7 +133,7 @@ def run_app():
                 
                 h_color = 'lime' if window_open else 'red'
 
-                # --- WINDOW 1: UNCHANGED ---
+                # --- WINDOW 1 ---
                 ax1.scatter(0, 0, color='yellow', s=100, edgecolors='orange') 
                 ax1.plot(r_e * np.cos(theta), r_e * np.sin(theta), color='cyan', alpha=0.2)
                 ax1.plot(r_p * np.cos(theta), r_p * np.sin(theta), color='lime', alpha=0.2)
@@ -184,37 +181,37 @@ def run_app():
                          bbox=dict(facecolor='#111111', alpha=0.8, edgecolor=h_color, pad=12))
                 fig1.suptitle(f"System Analysis: {dt.strftime('%Y-%m-%d %H:%M:%S')}\n(Press 'q' to return to menu)", color='white')
 
-                # --- WINDOW 2: TRANSITION WITH RADIAL DISTANCE ---
+                # --- WINDOW 2: TRANSITION (Relative Distances) ---
                 zoom_range = 0.3
-                inj_x, inj_y = h_x[0], h_y[0]
-                cap_x, cap_y = h_x[-1], h_y[-1]
+                inj_node = np.array([h_x[0], h_y[0]])
+                cap_node = np.array([h_x[-1], h_y[-1]])
 
-                # Left: Departure Handover (Injection)
-                tax1.plot(r_e * np.cos(theta), r_e * np.sin(theta), color='cyan', alpha=0.4, label="Earth Orbit")
-                tax1.plot(h_x, h_y, color='orange', linestyle=':', linewidth=2, label="Transfer Path")
-                tax1.scatter(inj_x, inj_y, color='yellow', s=100, marker='o', zorder=5)
-                # Radial Line and Distance Text
-                tax1.plot([0, inj_x], [0, inj_y], 'w--', alpha=0.3)
-                tax1.text(inj_x, inj_y - 0.1, f"Injection Dist:\n{r_e*AU_KM:,.0f} km", color='white', fontsize=8, ha='center')
-                tax1.text(inj_x, inj_y + 0.05, "Leaving Earth Orbit", color='yellow', fontsize=8, ha='center', weight='bold')
+                # Calculation of relative distances in KM
+                dist_from_earth = np.linalg.norm(inj_node - e_pos[:2]) * AU_KM
+                dist_from_target = np.linalg.norm(cap_node - p_pos[:2]) * AU_KM
+
+                # Left: Departure (Relative to Earth)
+                tax1.plot(r_e * np.cos(theta), r_e * np.sin(theta), color='cyan', alpha=0.4)
+                tax1.plot(h_x, h_y, color='orange', linestyle=':', linewidth=2)
+                tax1.scatter(inj_node[0], inj_node[1], color='yellow', s=100, marker='o', zorder=5)
+                tax1.plot([e_pos[0], inj_node[0]], [e_pos[1], inj_node[1]], 'w--', alpha=0.6)
+                tax1.text(inj_node[0], inj_node[1] - 0.12, f"Dist from Earth:\n{dist_from_earth:,.0f} km", color='white', fontsize=8, ha='center')
                 
                 tax1.set_title(f"Transition 1: Injection\nΔv: {dv1:.2f} km/s")
-                tax1.set_xlim(inj_x - zoom_range, inj_x + zoom_range)
-                tax1.set_ylim(inj_y - zoom_range, inj_y + zoom_range)
+                tax1.set_xlim(inj_node[0] - zoom_range, inj_node[0] + zoom_range)
+                tax1.set_ylim(inj_node[1] - zoom_range, inj_node[1] + zoom_range)
                 tax1.set_aspect('equal')
 
-                # Right: Arrival Handover (Capture)
-                tax2.plot(r_p * np.cos(theta), r_p * np.sin(theta), color='lime', alpha=0.4, label=f"{target_name} Orbit")
-                tax2.plot(h_x, h_y, color='orange', linestyle=':', linewidth=2, label="Transfer Path")
-                tax2.scatter(cap_x, cap_y, color='yellow', s=100, marker='o', zorder=5)
-                # Radial Line and Distance Text
-                tax2.plot([0, cap_x], [0, cap_y], 'w--', alpha=0.3)
-                tax2.text(cap_x, cap_y - 0.1, f"Capture Dist:\n{r_p*AU_KM:,.0f} km", color='white', fontsize=8, ha='center')
-                tax2.text(cap_x, cap_y + 0.05, f"Joining {target_name} Orbit", color='yellow', fontsize=8, ha='center', weight='bold')
+                # Right: Arrival (Relative to Target)
+                tax2.plot(r_p * np.cos(theta), r_p * np.sin(theta), color='lime', alpha=0.4)
+                tax2.plot(h_x, h_y, color='orange', linestyle=':', linewidth=2)
+                tax2.scatter(cap_node[0], cap_node[1], color='yellow', s=100, marker='o', zorder=5)
+                tax2.plot([p_pos[0], cap_node[0]], [p_pos[1], cap_node[1]], 'w--', alpha=0.6)
+                tax2.text(cap_node[0], cap_node[1] - 0.12, f"Dist from {target_name}:\n{dist_from_target:,.0f} km", color='white', fontsize=8, ha='center')
                 
                 tax2.set_title(f"Transition 2: Capture\nΔv: {dv2:.2f} km/s")
-                tax2.set_xlim(cap_x - zoom_range, cap_x + zoom_range)
-                tax2.set_ylim(cap_y - zoom_range, cap_y + zoom_range)
+                tax2.set_xlim(cap_node[0] - zoom_range, cap_node[0] + zoom_range)
+                tax2.set_ylim(cap_node[1] - zoom_range, cap_node[1] + zoom_range)
                 tax2.set_aspect('equal')
 
             if t_choice == 'y':
